@@ -1,0 +1,22 @@
+{
+	"name": "shivapoudel/phpcacheadmin",
+	"description": "A web dashboard for your favorite caching system.",
+	"version": "1.0.0",
+	"type": "project",
+	"license": "MIT",
+	"homepage": "https://shiva-poudel.com.np",
+	"minimum-stability": "dev",
+	"prefer-stable": true,
+	"config": {
+		"process-timeout": 0,
+		"sort-packages": true,
+		"optimize-autoloader": true,
+		"preferred-install": "dist"
+	},
+	"require": {
+		"php": ">=8.2",
+		"oscarotero/env": "^2.1",
+		"robinn/phpcacheadmin": "^2.3",
+		"vlucas/phpdotenv": "^5.6"
+	}
+}

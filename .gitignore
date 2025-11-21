@@ -1,0 +1,14 @@
+tmp
+
+# Dotenv
+.env
+.env.*
+!.env.example
+
+# Composer
+vendor
+auth.json
+
+# Operating system specific files
+.DS_Store
+Thumbs.db
