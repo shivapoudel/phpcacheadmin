@@ -1,13 +1,5 @@
 FROM php:8.3-fpm AS build
 
-# Persistent dependencies
-RUN set -eux; \
-	apt-get update; \
-	apt-get install -y --no-install-recommends \
-		ghostscript \
-	; \
-	rm -rf /var/lib/apt/lists/*
-
 # Install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
 RUN set -ex; \
 	\
@@ -25,6 +17,8 @@ RUN set -ex; \
 		libzip-dev \
 		libonig-dev \
 		liblz4-dev \
+		libzstd-dev \
+		libsasl2-dev \
 		libmemcached-dev \
 		zlib1g-dev \
 		libssl-dev \
@@ -45,35 +39,23 @@ RUN set -ex; \
 		zip \
         mbstring \
 	; \
-# https://pecl.php.net/package/imagick
+# pecl will claim success even if one install fails, so we need to perform each install separately
 	pecl install imagick-3.8.0; \
-	docker-php-ext-enable imagick; \
-	\
-# https://pecl.php.net/package/igbinary
-	pecl install igbinary-3.2.16; \
-    docker-php-ext-enable igbinary; \
-	\
-# https://pecl.php.net/package/zstd
 	pecl install zstd-0.15.2; \
-	docker-php-ext-enable zstd; \
-	\
-# https://pecl.php.net/package/msgpack
+	pecl install igbinary-3.2.16; \
 	pecl install msgpack-3.0.0; \
-    docker-php-ext-enable msgpack; \
+	pecl install --configureoptions 'enable-memcached-igbinary="yes" enable-memcached-json="yes" enable-memcached-msgpack="yes" with-libmemcached-dir="/usr"' memcached-3.4.0; \
+	pecl install --configureoptions 'enable-redis="yes" disable-redis-session="yes" disable-redis-json="yes" enable-redis-igbinary="yes" enable-redis-msgpack="yes" enable-redis-zstd="yes" with-libzstd="yes" enable-redis-lzf="yes" with-liblzf="yes" enable-redis-lz4="yes" with-liblz4="yes"' redis-6.3.0; \
 	\
-# https://pecl.php.net/package/memcached
-	pecl install memcached-3.2.0 --enable-memcached-igbinary --enable-memcached-msgpack; \
-    docker-php-ext-enable memcached; \
-	\
-# https://pecl.php.net/package/redis
-	pecl install --configureoptions="\
-		enable-redis-igbinary='yes' \
-		enable-redis-zstd='yes' \
-		enable-redis-msgpack='yes' \
-		enable-redis-lz4='yes' \
-		with-liblz4='yes' \
-	" redis-6.3.0; \
-	docker-php-ext-enable redis; \
+	docker-php-ext-enable \
+		imagick \
+		zstd \
+		igbinary \
+		msgpack \
+		memcached \
+		redis \
+	; \
+	rm -r /tmp/pear; \
 	\
 # some misbehaving extensions end up outputting to stdout 🙈 (https://github.com/docker-library/wordpress/issues/669#issuecomment-993945967)
 	out="$(php -r 'exit(0);')"; \
@@ -91,12 +73,10 @@ RUN set -ex; \
 		| sort -u \
 		| xargs -r dpkg-query --search \
 		| cut -d: -f1 \
-		| sort -u \
-		| xargs -rt apt-mark manual; \
+		| sort -u > /tmp/runtime-packages.txt; \
 	\
 	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
 	rm -rf /var/lib/apt/lists/*; \
-	rm -r /tmp/pear; \
 	\
 	! { ldd "$extDir"/*.so | grep 'not found'; }; \
 # check for output like "PHP Warning:  PHP Startup: Unable to load dynamic library 'foo' (tried: ...)
@@ -113,15 +93,7 @@ RUN set -eux; \
 		echo 'opcache.max_accelerated_files=4000'; \
 		echo 'opcache.revalidate_freq=2'; \
 	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
-
-# see https://github.com/phpredis/phpredis/blob/develop/INSTALL.md
-RUN { \
-    echo "redis.serializer=igbinary"; \
-    echo "redis.session.lock_retries=100"; \
-    echo "redis.session.lock_wait_time=200000"; \
-    echo "redis.session.locking_enabled=0"; \
-} > /usr/local/etc/php/conf.d/redis-recommended.ini
-
+# https://wordpress.org/support/article/editing-wp-config-php/#configure-error-logging
 RUN { \
 # https://www.php.net/manual/en/errorfunc.constants.php
 # https://github.com/docker-library/wordpress/issues/420#issuecomment-517839670
@@ -138,12 +110,22 @@ RUN { \
 
 FROM php:8.3-fpm AS runtime
 
-# Set working directory
-WORKDIR /var/www/html
+# Install persistent runtime dependencies
+COPY --from=build /tmp/runtime-packages.txt /tmp/runtime-packages.txt
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        nano \
+        ghostscript \
+        $(cat /tmp/runtime-packages.txt || true) \
+    ; \
+    rm -rf /tmp/runtime-packages.txt /var/lib/apt/lists/*
 
-# Copy compiled extensions and config from build stage
+# Copy PHP extensions and configuration from build stage
 COPY --from=build /usr/local/lib/php/extensions/ /usr/local/lib/php/extensions/
 COPY --from=build /usr/local/etc/php/conf.d/ /usr/local/etc/php/conf.d/
+
+VOLUME /var/www/html
 
 # Create phpinfo page
 RUN echo "<?php phpinfo();" > index.php
