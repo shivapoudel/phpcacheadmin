@@ -1,11 +1,9 @@
-# Use PHP 8.3 FPM base image
-FROM php:8.3-fpm
+FROM php:8.3-fpm AS build
 
 # Persistent dependencies
 RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
-		# Ghostscript is required for rendering PDF previews
 		ghostscript \
 	; \
 	rm -rf /var/lib/apt/lists/*
@@ -17,7 +15,6 @@ RUN set -ex; \
 	\
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
-		$PHPIZE_DEPS \
 		libavif-dev \
 		libfreetype6-dev \
 		libicu-dev \
@@ -28,6 +25,9 @@ RUN set -ex; \
 		libzip-dev \
 		libonig-dev \
 		liblz4-dev \
+		libmemcached-dev \
+		zlib1g-dev \
+		libssl-dev \
 	; \
 	\
 	docker-php-ext-configure gd \
@@ -49,17 +49,21 @@ RUN set -ex; \
 	pecl install imagick-3.8.0; \
 	docker-php-ext-enable imagick; \
 	\
-# https://pecl.php.net/package/zstd
-	pecl install zstd-0.15.2; \
-	docker-php-ext-enable imagick; \
-	\
 # https://pecl.php.net/package/igbinary
 	pecl install igbinary-3.2.16; \
     docker-php-ext-enable igbinary; \
 	\
+# https://pecl.php.net/package/zstd
+	pecl install zstd-0.15.2; \
+	docker-php-ext-enable zstd; \
+	\
 # https://pecl.php.net/package/msgpack
 	pecl install msgpack-3.0.0; \
     docker-php-ext-enable msgpack; \
+	\
+# https://pecl.php.net/package/memcached
+	pecl install memcached-3.2.0 --enable-memcached-igbinary --enable-memcached-msgpack; \
+    docker-php-ext-enable memcached; \
 	\
 # https://pecl.php.net/package/redis
 	pecl install --configureoptions="\
@@ -70,7 +74,6 @@ RUN set -ex; \
 		with-liblz4='yes' \
 	" redis-6.3.0; \
 	docker-php-ext-enable redis; \
-	rm -r /tmp/pear; \
 	\
 # some misbehaving extensions end up outputting to stdout 🙈 (https://github.com/docker-library/wordpress/issues/669#issuecomment-993945967)
 	out="$(php -r 'exit(0);')"; \
@@ -93,6 +96,7 @@ RUN set -ex; \
 	\
 	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
 	rm -rf /var/lib/apt/lists/*; \
+	rm -r /tmp/pear; \
 	\
 	! { ldd "$extDir"/*.so | grep 'not found'; }; \
 # check for output like "PHP Warning:  PHP Startup: Unable to load dynamic library 'foo' (tried: ...)
@@ -132,8 +136,14 @@ RUN { \
 		echo 'html_errors = Off'; \
 	} > /usr/local/etc/php/conf.d/error-logging.ini
 
+FROM php:8.3-fpm AS runtime
+
 # Set working directory
 WORKDIR /var/www/html
+
+# Copy compiled extensions and config from build stage
+COPY --from=build /usr/local/lib/php/extensions/ /usr/local/lib/php/extensions/
+COPY --from=build /usr/local/etc/php/conf.d/ /usr/local/etc/php/conf.d/
 
 # Create phpinfo page
 RUN echo "<?php phpinfo();" > index.php
